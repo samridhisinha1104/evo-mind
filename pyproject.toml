@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evomind"
+version = "0.2.0"
+description = "An agentic AI system that evolves its own problem-solving strategy"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+dependencies = [
+    "langgraph>=1.2,<2.0",
+    "groq>=1.0",
+    "huggingface_hub>=0.25",
+    "anthropic>=1.0,<2.0",
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "scikit-learn>=1.4",
+    "scipy>=1.12",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+]
+dashboard = [
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
+    "websockets>=12.0",
+]
+embeddings = [
+    "sentence-transformers>=3.0",
+]
+excel = [
+    "openpyxl>=3.1",
+]
+sql = [
+    "sqlalchemy>=2.0",
+]
+all = [
+    "evomind[dev,dashboard,embeddings,excel,sql]",
+]
+
+[project.scripts]
+evomind = "evomind.main:main"
+
+[tool.setuptools.packages.find]
+include = ["evomind*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
