@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import './App.css'
 
-const API_BASE = 'http://localhost:8000'
+const API_BASE = ''
 
 function App() {
   const [view, setView] = useState('dashboard')
@@ -14,24 +14,36 @@ function App() {
   const [threshold, setThreshold] = useState(0.8)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [wsConnected, setWsConnected] = useState(false)
+  const [apiConnected, setApiConnected] = useState(false)
   const wsRef = useRef(null)
 
   // Fetch jobs
   useEffect(() => {
-    const interval = setInterval(async () => {
+    const fetchJobs = async () => {
       try {
         const res = await fetch(`${API_BASE}/api/jobs`)
-        const data = await res.json()
-        setJobs(data)
-      } catch (e) { /* server not running */ }
-    }, 2000)
+        if (res.ok) {
+          const data = await res.json()
+          setJobs(data)
+          setApiConnected(true)
+        } else {
+          setApiConnected(false)
+        }
+      } catch (e) {
+        setApiConnected(false)
+      }
+    }
+    fetchJobs()
+    const interval = setInterval(fetchJobs, 2000)
     return () => clearInterval(interval)
   }, [])
 
   // WebSocket connection for current job
   const connectWs = useCallback((jobId) => {
     if (wsRef.current) wsRef.current.close()
-    const ws = new WebSocket(`ws://localhost:8000/ws/jobs/${jobId}`)
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsHost = window.location.host
+    const ws = new WebSocket(`${wsProtocol}//${wsHost}/ws/jobs/${jobId}`)
     ws.onopen = () => setWsConnected(true)
     ws.onclose = () => setWsConnected(false)
     ws.onmessage = (event) => {
@@ -45,8 +57,15 @@ function App() {
   const fetchMemory = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/memory`)
-      setMemory(await res.json())
-    } catch (e) { /* */ }
+      if (res.ok) {
+        setMemory(await res.json())
+        setApiConnected(true)
+      } else {
+        setApiConnected(false)
+      }
+    } catch (e) {
+      setApiConnected(false)
+    }
   }
 
   // Submit analysis
@@ -100,8 +119,16 @@ function App() {
           </button>
         </div>
         <div className="sidebar-footer">
-          <div className={`status-dot ${wsConnected ? 'connected' : ''}`} />
-          <span>{wsConnected ? 'Connected' : 'Disconnected'}</span>
+          <div className="status-item">
+            <div className={`status-dot ${apiConnected ? 'connected' : ''}`} />
+            <span>Backend: {apiConnected ? 'Online' : 'Offline'}</span>
+          </div>
+          {currentJob && (
+            <div className="status-item">
+              <div className={`status-dot ${wsConnected ? 'connected' : ''}`} />
+              <span>Live Run: {wsConnected ? 'Connected' : 'Disconnected'}</span>
+            </div>
+          )}
         </div>
       </nav>
 

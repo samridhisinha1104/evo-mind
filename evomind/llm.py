@@ -4,8 +4,11 @@ Reads EVOMIND_PROVIDER from the environment to decide which backend to use.
 All clients implement the same LLMClient protocol so the rest of the codebase
 is provider-agnostic.
 """
-
 from __future__ import annotations
+
+from dotenv import load_dotenv
+load_dotenv()
+
 
 import json
 import os
