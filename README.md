@@ -14,7 +14,7 @@ Every strategy it tries — its lineage, mutations, and scores — is written to
 
 ---
 Check it out here :
-evo-mind-production-3f0d.up.railway.app
+https://evo-mind-production-3f0d.up.railway.app/
 
 
 ## ✨ Key Features
