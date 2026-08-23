@@ -6,7 +6,7 @@ so it can be logged, checkpointed, or persisted without extra work.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, TypedDict, NotRequired
 
 
 class Strategy(TypedDict):
@@ -20,6 +20,8 @@ class Strategy(TypedDict):
     parent_name: str           # which strategy was this mutated from?
     mutation_applied: str      # which operator(s) were used?
     generation: int            # how many mutations deep are we?
+    id: NotRequired[int]       # database ID of the strategy
+    parent_id: NotRequired[int] # database ID of the parent strategy
 
 
 class StepResult(TypedDict):

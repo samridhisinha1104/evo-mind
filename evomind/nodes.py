@@ -540,11 +540,32 @@ def planner_node(state: EvoState, llm: LLMClient | None = None, memory: Strategy
     if iteration == 0:
         memory = memory or StrategyMemory()
         recalled = memory.get_best_strategies(state["task_signature"], top_k=3)
+        try:
+            from evomind.llm import get_task_embedding
+            query_embedding = get_task_embedding(state["task_description"])
+            similar_strategies = memory.get_strategies_for_similar_tasks(
+                query_embedding,
+                top_k_tasks=3,
+                top_k_strategies=2,
+                exclude_signature=state["task_signature"],
+            )
+        except Exception as e:
+            similar_strategies = []
+            print(f"[Warning] Failed to recall cross-task strategies: {e}")
+
+        # Combine exact matches and cross-task matches, avoiding duplicate names
+        all_recalled = list(recalled)
+        seen_names = {s["name"].lower() for s in all_recalled}
+        for s in similar_strategies:
+            if s["name"].lower() not in seen_names:
+                all_recalled.append(s)
+                seen_names.add(s["name"].lower())
+
         prompt = (
             f"Task: {state['task_description']}\n"
             f"Dataset summary: {json.dumps(state['dataset_summary'])}\n"
             f"Available analysis steps (use ONLY these names): {AVAILABLE_STEPS}\n"
-            f"Previously successful strategies on similar tasks (may be empty): {json.dumps(recalled)}\n\n"
+            f"Previously successful strategies on similar tasks (may be empty): {json.dumps(all_recalled)}\n\n"
             "Propose an initial Strategy as JSON with keys: "
             "name (string), description (string), steps (ordered list of step names from the available list, no duplicates), "
             "params (object with any of: threshold, iqr_multiplier, skew_threshold, n_clusters, n_components, "
@@ -616,6 +637,8 @@ def planner_node(state: EvoState, llm: LLMClient | None = None, memory: Strategy
             strategy["parent_name"] = prev_strategy["name"]
             strategy["mutation_applied"] = "+".join(applied_ops)
             strategy["generation"] = prev_strategy.get("generation", 0) + 1
+            if "id" in prev_strategy:
+                strategy["parent_id"] = prev_strategy["id"]
 
         except Exception:
             # Fallback: random mutation
@@ -629,6 +652,8 @@ def planner_node(state: EvoState, llm: LLMClient | None = None, memory: Strategy
             strategy["parent_name"] = prev_strategy["name"]
             strategy["mutation_applied"] = "+".join(ops)
             strategy["generation"] = prev_strategy.get("generation", 0) + 1
+            if "id" in prev_strategy:
+                strategy["parent_id"] = prev_strategy["id"]
 
     return {"strategy": strategy}
 
@@ -833,15 +858,18 @@ def reflector_node(state: EvoState, memory: StrategyMemory | None = None) -> dic
     parent_name = strategy.get("parent_name", "")
     mutation_type = strategy.get("mutation_applied", "")
     generation = strategy.get("generation", 0)
+    parent_id = strategy.get("parent_id")
 
-    memory.save_strategy(
+    strategy_id = memory.save_strategy(
         state["task_signature"],
         strategy,
         evaluation["score"],
         evaluation["rationale"],
+        parent_id=parent_id,
         mutation_type=mutation_type,
         generation=generation,
     )
+    strategy["id"] = strategy_id
     memory.record_run(state["task_signature"], iteration, strategy, evaluation["score"])
 
     history = list(state.get("history", []))
@@ -865,6 +893,7 @@ def reflector_node(state: EvoState, memory: StrategyMemory | None = None) -> dic
         should_continue, stop_reason = True, ""
 
     return {
+        "strategy": strategy,
         "history": history,
         "best_score": best_score,
         "best_strategy": best_strategy,

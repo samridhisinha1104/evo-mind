@@ -74,6 +74,15 @@ def run_evomind(
     task_signature = make_task_signature(task_description, dataset_summary)
 
     memory = memory or StrategyMemory()
+
+    # Save task embedding for similar task recall
+    try:
+        from evomind.llm import get_task_embedding
+        emb = get_task_embedding(task_description)
+        memory.save_task_embedding(task_signature, task_description, emb)
+    except Exception as e:
+        print(f"[Warning] Failed to save task embedding in CLI: {e}")
+
     compiled = build_graph(df, llm=llm, memory=memory)
 
     initial_state: EvoState = {

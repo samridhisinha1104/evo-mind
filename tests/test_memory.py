@@ -99,3 +99,84 @@ def test_task_embeddings_and_similarity(tmp_path):
         top_k_strategies=1,
     )
     assert len(results) >= 1
+
+
+def test_integration_lineage_propagation(tmp_path):
+    """Test that reflector_node saves and updates strategy IDs and planner_node propagates parent_id."""
+    from evomind.nodes import planner_node, reflector_node
+    from evomind.state import EvoState
+    from unittest.mock import MagicMock
+
+    mem = StrategyMemory(tmp_path / "test.db")
+
+    # 1. First iteration (iteration 0)
+    # Reflector node runs and saves the initial strategy, returning ID
+    state: EvoState = {
+        "task_description": "Analyze housing price trends",
+        "task_signature": "sig_housing",
+        "strategy": {
+            "name": "initial_strat",
+            "description": "Baseline",
+            "steps": ["describe_data"],
+            "params": {},
+            "parent_name": "",
+            "mutation_applied": "initial",
+            "generation": 0,
+        },
+        "evaluation": {
+            "score": 0.5,
+            "rationale": "Okay baseline",
+            "insight_depth": 0.5,
+            "coverage": 0.5,
+            "efficiency": 0.5,
+            "novelty": 0.5,
+            "signal_count": 1,
+        },
+        "iteration": 0,
+        "history": [],
+    }
+
+    reflector_out = reflector_node(state, memory=mem)
+    state.update(reflector_out)
+
+    assert "id" in state["strategy"]
+    first_id = state["strategy"]["id"]
+    assert first_id > 0
+
+    # 2. Second iteration (iteration 1)
+    # Planner node runs to propose a mutated strategy. It should set the parent_id to first_id
+    mock_llm = MagicMock()
+    mock_llm.complete_json.return_value = {"operators": ["add_step"], "reasoning": "Let's add missing values."}
+
+    planner_out = planner_node(state, llm=mock_llm, memory=mem)
+    state.update(planner_out)
+
+    assert state["strategy"]["parent_id"] == first_id
+    assert state["strategy"]["generation"] == 1
+    assert state["strategy"]["parent_name"] == "initial_strat"
+
+    # Reflector node runs again for the mutated strategy
+    state["evaluation"] = {
+        "score": 0.75,
+        "rationale": "Better coverage",
+        "insight_depth": 0.7,
+        "coverage": 0.8,
+        "efficiency": 0.75,
+        "novelty": 0.6,
+        "signal_count": 3,
+    }
+    state["iteration"] = 1
+
+    reflector_out = reflector_node(state, memory=mem)
+    state.update(reflector_out)
+
+    second_id = state["strategy"]["id"]
+    assert second_id > first_id
+
+    # Verify lineage path in DB
+    lineage = mem.get_lineage(second_id)
+    assert len(lineage) == 2
+    assert lineage[0]["id"] == second_id
+    assert lineage[0]["parent_id"] == first_id
+    assert lineage[1]["id"] == first_id
+

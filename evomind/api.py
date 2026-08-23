@@ -174,23 +174,6 @@ async def icons():
     return FileResponse(str(f)) if f.exists() else HTMLResponse("", 404)
 
 
-@app.get("/", include_in_schema=False)
-@app.get("/{full_path:path}", include_in_schema=False)
-async def serve_dashboard(full_path: str = ""):
-    """Serve the React SPA for any non-API path."""
-    # Let /api/* and /ws/* routes handle themselves
-    if full_path.startswith("api/") or full_path.startswith("ws/") or full_path.startswith("docs") or full_path.startswith("openapi.json"):
-        raise HTTPException(404)
-    index = DASHBOARD_DIR / "index.html"
-    if index.exists():
-        return FileResponse(str(index))
-    return HTMLResponse(
-        "<h1>EvoMind API</h1>"
-        "<p>Dashboard not built yet. Run <code>cd evomind/dashboard && npm run build</code></p>"
-        "<p>API docs: <a href='/docs'>/docs</a></p>"
-    )
-
-
 # ---------------------------------------------------------------------------
 # API Endpoints
 # ---------------------------------------------------------------------------
@@ -339,6 +322,15 @@ async def _run_job(job_id: str) -> None:
 
         dataset_summary = summarize_dataset(df)
         task_signature = make_task_signature(job["task"], dataset_summary)
+
+        # Save task embedding for similar task recall
+        try:
+            from evomind.llm import get_task_embedding
+            emb = get_task_embedding(job["task"])
+            _memory.save_task_embedding(task_signature, job["task"], emb)
+        except Exception as e:
+            print(f"[Warning] Failed to save task embedding: {e}")
+
         llm = get_llm_client()
 
         state = {
@@ -410,6 +402,23 @@ async def _run_job(job_id: str) -> None:
         os.unlink(job["data_path"])
     except Exception:
         pass
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_dashboard(full_path: str = ""):
+    """Serve the React SPA for any non-API path."""
+    # Let /api/* and /ws/* routes handle themselves
+    if full_path.startswith("api/") or full_path.startswith("ws/") or full_path.startswith("docs") or full_path.startswith("openapi.json"):
+        raise HTTPException(404)
+    index = DASHBOARD_DIR / "index.html"
+    if index.exists():
+        return FileResponse(str(index))
+    return HTMLResponse(
+        "<h1>EvoMind API</h1>"
+        "<p>Dashboard not built yet. Run <code>cd evomind/dashboard && npm run build</code></p>"
+        "<p>API docs: <a href='/docs'>/docs</a></p>"
+    )
 
 
 # ---------------------------------------------------------------------------

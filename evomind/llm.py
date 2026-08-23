@@ -157,3 +157,15 @@ def get_llm_client(
             f"Unknown EVOMIND_PROVIDER={provider!r}. Supported: {supported}"
         )
     return cls(model=model)
+
+
+_embedding_model = None
+
+
+def get_task_embedding(text: str) -> list[float]:
+    """Generate a vector embedding for a task description using sentence-transformers."""
+    global _embedding_model
+    if _embedding_model is None:
+        from sentence_transformers import SentenceTransformer
+        _embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _embedding_model.encode(text).tolist()
