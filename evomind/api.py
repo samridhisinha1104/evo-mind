@@ -157,13 +157,30 @@ _memory = StrategyMemory()
 
 DASHBOARD_DIR = Path(__file__).resolve().parent / "dashboard" / "dist"
 
-if DASHBOARD_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(DASHBOARD_DIR)), name="static")
+# Mount /assets — matches the paths Vite outputs: /assets/index-xxx.js
+if (DASHBOARD_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(DASHBOARD_DIR / "assets")), name="assets")
 
 
-@app.get("/")
-async def serve_dashboard():
-    """Serve the React dashboard."""
+@app.get("/favicon.svg", include_in_schema=False)
+async def favicon():
+    f = DASHBOARD_DIR / "favicon.svg"
+    return FileResponse(str(f)) if f.exists() else HTMLResponse("", 404)
+
+
+@app.get("/icons.svg", include_in_schema=False)
+async def icons():
+    f = DASHBOARD_DIR / "icons.svg"
+    return FileResponse(str(f)) if f.exists() else HTMLResponse("", 404)
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_dashboard(full_path: str = ""):
+    """Serve the React SPA for any non-API path."""
+    # Let /api/* and /ws/* routes handle themselves
+    if full_path.startswith("api/") or full_path.startswith("ws/") or full_path.startswith("docs") or full_path.startswith("openapi.json"):
+        raise HTTPException(404)
     index = DASHBOARD_DIR / "index.html"
     if index.exists():
         return FileResponse(str(index))
