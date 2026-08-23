@@ -59,7 +59,8 @@ coverage.xml
 
 # Node / React Dashboard
 evomind/dashboard/node_modules/
-evomind/dashboard/dist/
+# dist/ is intentionally tracked so Railway/Render can serve it without a Node build step
+# evomind/dashboard/dist/
 evomind/dashboard/dist-ssr/
 evomind/dashboard/*.local
 npm-debug.log*

@@ -115,6 +115,23 @@ class AnthropicLLMClient:
         return json.loads(_strip_fences(text))
 
 
+class FallbackLLMClient:
+    """Tries Groq first, falls back to HuggingFace on rate limits or errors."""
+
+    def __init__(self, model: str | None = None):
+        self.primary = GroqLLMClient(model=model)
+        # HF has its own default model, so we don't force the Groq model name on it
+        # unless EVOMIND_MODEL is explicitly set in the environment.
+        self.fallback = HuggingFaceLLMClient()
+
+    def complete_json(self, system: str, prompt: str) -> dict[str, Any]:
+        try:
+            return self.primary.complete_json(system, prompt)
+        except Exception as e:
+            print(f"[FallbackLLMClient] Groq failed ({type(e).__name__}: {e}). Falling back to HuggingFace...")
+            return self.fallback.complete_json(system, prompt)
+
+
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
@@ -123,6 +140,7 @@ _PROVIDERS: dict[str, type] = {
     "groq": GroqLLMClient,
     "huggingface": HuggingFaceLLMClient,
     "anthropic": AnthropicLLMClient,
+    "auto": FallbackLLMClient,
 }
 
 

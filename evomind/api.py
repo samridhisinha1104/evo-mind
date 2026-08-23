@@ -8,6 +8,14 @@ Endpoints:
     GET  /api/strategies/{sig}  Best strategies for a task type
     WS   /ws/jobs/{id}          Stream iteration updates in real-time
     GET  /                      Serve the React dashboard
+
+Production env vars:
+    ALLOWED_ORIGINS  Comma-separated allowed CORS origins, e.g. https://myapp.up.railway.app
+                     Defaults to * (allow all) when not set.
+    APP_PASSWORD     If set, all API routes require HTTP Basic Auth with this password.
+                     Username can be anything. Leave unset to disable auth.
+    GROQ_API_KEY     Groq LLM key (primary provider)
+    HF_TOKEN         HuggingFace token (fallback provider)
 """
 
 from __future__ import annotations
@@ -15,15 +23,18 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
+import sqlite3
 import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
 from evomind.config import load_config
@@ -33,19 +44,107 @@ from evomind.memory import StrategyMemory
 from evomind.nodes import AVAILABLE_STEPS, make_task_signature, summarize_dataset
 from evomind.telemetry import RunTracker
 
+# ---------------------------------------------------------------------------
+# CORS — reads from ALLOWED_ORIGINS env var in production
+# ---------------------------------------------------------------------------
+
+_raw_origins = os.environ.get("ALLOWED_ORIGINS", "").strip()
+_ALLOWED_ORIGINS: list[str] = (
+    [o.strip() for o in _raw_origins.split(",") if o.strip()]
+    if _raw_origins else ["*"]
+)
+
 app = FastAPI(title="EvoMind API", version="0.2.0")
 
-# CORS for React dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# In-memory job store
-_jobs: dict[str, dict[str, Any]] = {}
+
+# ---------------------------------------------------------------------------
+# Optional password auth — set APP_PASSWORD env var to enable
+# ---------------------------------------------------------------------------
+
+_APP_PASSWORD = os.environ.get("APP_PASSWORD", "").strip()
+_http_security = HTTPBasic(auto_error=False)
+
+
+def _check_auth(credentials: HTTPBasicCredentials | None = Depends(_http_security)) -> None:
+    """If APP_PASSWORD is set, require HTTP Basic Auth on every request."""
+    if not _APP_PASSWORD:
+        return  # auth disabled
+    ok = (
+        credentials is not None
+        and secrets.compare_digest(
+            credentials.password.encode("utf-8"),
+            _APP_PASSWORD.encode("utf-8"),
+        )
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect password.",
+            headers={"WWW-Authenticate": 'Basic realm="EvoMind"'},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Persistent job store (SQLite) — jobs survive server restarts
+# ---------------------------------------------------------------------------
+
+_JOBS_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "jobs.db"
+
+
+class _JobDB:
+    """Thin SQLite wrapper that persists job dicts across restarts."""
+
+    def __init__(self, path: Path = _JOBS_DB_PATH) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS jobs (
+                    job_id   TEXT PRIMARY KEY,
+                    job_json TEXT NOT NULL,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.commit()
+
+    def load_all(self) -> dict[str, dict[str, Any]]:
+        with sqlite3.connect(self.path) as conn:
+            rows = conn.execute("SELECT job_id, job_json FROM jobs ORDER BY rowid").fetchall()
+        result = {}
+        for job_id, job_json in rows:
+            try:
+                result[job_id] = json.loads(job_json)
+            except Exception:
+                pass
+        return result
+
+    def save(self, job_id: str, job: dict[str, Any]) -> None:
+        with sqlite3.connect(self.path) as conn:
+            conn.execute(
+                """
+                INSERT INTO jobs (job_id, job_json, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    job_json   = excluded.job_json,
+                    updated_at = excluded.updated_at
+                """,
+                (job_id, json.dumps(job, default=str)),
+            )
+            conn.commit()
+
+
+_job_db = _JobDB()
+
+# Load jobs from disk on startup (persists across restarts)
+_jobs: dict[str, dict[str, Any]] = _job_db.load_all()
 _job_subscribers: dict[str, list[WebSocket]] = {}
 
 # Global memory instance
@@ -84,7 +183,7 @@ async def health():
     return {"status": "ok", "available_steps": AVAILABLE_STEPS}
 
 
-@app.post("/api/analyze")
+@app.post("/api/analyze", dependencies=[Depends(_check_auth)])
 async def submit_analysis(
     file: UploadFile = File(...),
     task: str = Form(...),
@@ -113,6 +212,7 @@ async def submit_analysis(
         "history": [],
         "result": None,
     }
+    _job_db.save(job_id, _jobs[job_id])  # persist immediately
 
     # Launch in background
     asyncio.create_task(_run_job(job_id))
@@ -120,7 +220,7 @@ async def submit_analysis(
     return {"job_id": job_id, "status": "queued"}
 
 
-@app.get("/api/jobs/{job_id}")
+@app.get("/api/jobs/{job_id}", dependencies=[Depends(_check_auth)])
 async def get_job(job_id: str):
     """Get job status and results."""
     job = _jobs.get(job_id)
@@ -129,13 +229,13 @@ async def get_job(job_id: str):
     return job
 
 
-@app.get("/api/jobs")
+@app.get("/api/jobs", dependencies=[Depends(_check_auth)])
 async def list_jobs():
     """List all jobs."""
     return list(_jobs.values())
 
 
-@app.get("/api/memory")
+@app.get("/api/memory", dependencies=[Depends(_check_auth)])
 async def get_memory():
     """Browse all strategies in memory."""
     return {
@@ -143,21 +243,21 @@ async def get_memory():
     }
 
 
-@app.get("/api/memory/tree/{task_signature}")
+@app.get("/api/memory/tree/{task_signature}", dependencies=[Depends(_check_auth)])
 async def get_evolution_tree(task_signature: str):
     """Get the evolution tree for a task signature."""
     tree = _memory.get_evolution_tree(task_signature)
     return {"task_signature": task_signature, "tree": tree}
 
 
-@app.get("/api/strategies/{task_signature}")
+@app.get("/api/strategies/{task_signature}", dependencies=[Depends(_check_auth)])
 async def get_strategies(task_signature: str, top_k: int = 5):
     """Get best strategies for a task type."""
     strategies = _memory.get_best_strategies(task_signature, top_k=top_k)
     return {"task_signature": task_signature, "strategies": strategies}
 
 
-@app.get("/api/available-steps")
+@app.get("/api/available-steps", dependencies=[Depends(_check_auth)])
 async def available_steps():
     """List all available analysis steps."""
     return {"steps": AVAILABLE_STEPS}
@@ -213,6 +313,7 @@ async def _run_job(job_id: str) -> None:
 
     job = _jobs[job_id]
     job["status"] = "running"
+    _job_db.save(job_id, job)
     await _notify_subscribers(job_id, job)
 
     try:
@@ -264,6 +365,7 @@ async def _run_job(job_id: str) -> None:
             }
             job["history"].append(iteration_data)
             job["status"] = "running"
+            _job_db.save(job_id, job)
             await _notify_subscribers(job_id, {**job, "latest_iteration": iteration_data})
 
             # Small delay to not overwhelm
@@ -283,6 +385,7 @@ async def _run_job(job_id: str) -> None:
         job["status"] = "failed"
         job["error"] = str(exc)
 
+    _job_db.save(job_id, job)
     await _notify_subscribers(job_id, job)
 
     # Cleanup temp file
