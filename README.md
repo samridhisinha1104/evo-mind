@@ -13,6 +13,9 @@ plan a strategy → execute it → evaluate results → reflect → mutate → r
 Every strategy it tries — its lineage, mutations, and scores — is written to a persistent SQLite memory. The next time it sees a similar task, it starts from what already worked.
 
 ---
+Check it out here :
+evo-mind-production-3f0d.up.railway.app
+
 
 ## ✨ Key Features
 
